@@ -1,0 +1,21 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'io.rikka.starrailresolution'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'io.rikka.starrailresolution'
+        minSdk 30
+        targetSdk 36
+        versionCode 3
+        versionName '1.2.0'
+    }
+    buildTypes {
+        release { minifyEnabled false }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    testOptions { unitTests.returnDefaultValues = false }
+}
+dependencies { testImplementation 'junit:junit:4.13.2' }
