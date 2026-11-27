@@ -5,7 +5,7 @@ import java.nio.file.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
-/** Durable entry backups and verified, atomic replacement of a resource pack. */
+/** Durable backups and complete-file verification around an injected commit strategy. */
 public final class ResourceTransaction {
     public interface Committer { void replace(File prepared, File destination) throws IOException; }
     public interface Journal {
@@ -64,9 +64,9 @@ public final class ResourceTransaction {
                 throw new IOException("待写入文件校验失败，原文件未替换");
             }
             if(!Hashing.md5(pack).equals(expectedMd5)) throw new IOException("游戏资源已变化，取消替换");
-            // The committer preserves original ownership/mode on Android and
-            // renames within the same directory. A failed preparation or
-            // rename leaves the original file intact instead of half patched.
+            // Root uses metadata-preserving atomic rename. ADB uses a synced
+            // entry patch to keep the existing app-owned inode, with rollback
+            // on I/O failure and journal-based recovery after interruption.
             committer.replace(prepared,pack);
             if(pack.length()!=location.packSize || !Hashing.md5(pack).equals(afterMd5)) {
                 throw new IOException("写入后的完整文件校验异常；回退备份已保留");

@@ -1,4 +1,38 @@
-# v1.3.0 兼容性修复验证
+# v1.5.0 通用设备配置与国服选择验证
+
+
+- `testDebugUnitTest`、`assembleRelease`、`lintRelease`、`assembleDebugAndroidTest` 通过；34 项单元测试全部通过，Lint 0 错误。
+- 使用真实 4.7.0 配置验证四档 `Default`、五档 `Adreno VeryHigh` 和 `Mali VeryHigh` 全部最高档可修改，低档位及其他字节保持原样；新增 GPU 表名无白名单依赖。
+- 验证 Adreno、Mali、Xclipse、Maleoon、PowerVR 和未知 GPU 的预览路径；GPU 识别只决定显示，写入始终遍历全部显式表。
+- 验证 2400×1080 超宽屏、竖屏报告、2208×1840 折叠屏、1920×1920 方屏、3840×2560 平板、640×480 小屏及系统分辨率覆盖；预设随长边生成并去重。
+- Y900 已安装 1.5.0（6），设备 APK 的 SHA-256 与本地签名包一致：`21fe9bb9b4c463226e0b61cc3b11021f97fc80133a49f8ebfa3008706fc9b14c`。
+- 真实 Shizuku Binder（ADB UID 2000）与 Root UID 0 的独立副本自检通过，覆盖备份、全表修改、恢复及中断事务恢复；独立测试未修改真实游戏包。
+- 真实应用界面通过 Shizuku 将三张表最高档统一写入 `3840×2560`，并重新启动游戏。写入模式为保留游戏文件属主的定长写入；整包 MD5 为 `5dc70a1a77c6068850222658a873374b`，日志包含每张表的修改前后值。
+- 写入后诊断中的整包 MD5 和配置 SHA-256 已同步为提交后的值；恢复官方配置验证通过。配置备份及视频原理画面均取自这次真实操作。
+- 删去界面中的括号说明及重复实现细节，保留分辨率、设备信息和操作结果。本地验证日志在忽略的 `artifacts/universal-validation/` 下。
+
+## 国服、国际服与授权列表
+
+- Y900 同时安装官方国服 `com.miHoYo.hkrpg` 和国际服 `com.HoYoverse.hkrpgoversea`，均为 4.7.0（122）。界面可切换、记住所选版本，并显示对应游戏标签；两套网关均传递明确包名。
+- 两个版本分别通过真实 Shizuku Binder（Root UID 0）的检测和独立副本事务自检；ADB UID 2000 的文件助手也分别通过权限预检、写入、恢复及中断恢复自检。
+- 从真实助手界面选择国服，通过 Shizuku 应用 `3840×2560`，三张表的最高档全部更新，整包 MD5 为 `5dc70a1a77c6068850222658a873374b`，启动组件属于 `com.miHoYo.hkrpg`。
+- 点击国服撤销后，完整资源恢复为原始 MD5 `d1a94588bf414c621ba3933fd99300e0`；再次应用原生档通过。上述操作前后国际服完整 MD5 均为 `ca8cc441849817b76e71a032f876b3f1`。
+- 国服备份位于 `Download/StarRailResolution/com.miHoYo.hkrpg`，国际服沿用 `Download/StarRailResolution`，相同资源包哈希也使用各自的撤销记录。包名白名单和备份命名空间有单元测试覆盖。
+- 实机日志确认 Android 17 的 `IPackageManager.getInstalledPackages(long,int)` 返回 `PackageInfoList`；Shizuku 13.6.0 中的旧接口调用返回空列表。上游 [#2721](https://github.com/RikkaApps/Shizuku/pull/2721) 构建 `13d96cfd4ec7e07c62c2a6fd27d261c52e0f4198` 的同一查询返回 408 个应用，包含助手。使用该构建启动兼容服务后，官方管理界面显示「已授权 1 个应用」，助手条目及开启的授权开关均已核对；国服真实 Binder 自检再次通过。该服务为临时兼容运行方式，管理器重新启动原版服务后需重新运行兼容启动脚本。第三方兼容运行文件仅用于本地设备验证，不随助手发布。
+- 本地多版本日志位于忽略的 `artifacts/cn-adaptation/`，授权列表诊断位于 `artifacts/shizuku-list-diagnosis/`。
+
+## v1.4.0 Shizuku 历史验证
+
+- `:app:testDebugUnitTest`、`:app:assembleRelease`、`:app:lintRelease` 通过；24 项单元测试全部通过，Lint 0 错误。设备测试 APK 也已构建并通过同证书签名校验。
+- Y900（TB522FU）安装并启动官方 Shizuku 13.6.0，助手已更新为 1.4.0（5）。完成实际授权弹窗后，界面显示「Shizuku 已授权 · ADB 模式」及「已连接 · 资源校验通过」。安装包 SHA-256 与本地签名 APK 一致。
+- 通过真实 Shizuku Binder 运行设备集成测试，确认文件助手为 UID 2000，正常识别国际服 4.7.0（122），完成独立副本的备份、定长写入、恢复及中断记录修复。自检还验证共享存储锁及资源目录的临时文件操作。
+- Root（UID 0）独立文件助手的同一自检通过，保留原子替换路径。
+- 新增测试验证 ADB 写入保留原 inode 与属主、模拟短写后恢复原文件、从不可解码的中断条目恢复、拒绝覆盖无关资源变化；设备自检验证只处理最新事务，避免旧中断记录覆盖后续已完成操作。
+- ADB 无法将新文件属主改为游戏 UID，因此采用原文件的最小差异区间同步写入，配合预先持久化备份、完整文件校验和中断恢复；这一方式不具有 Root 原子重命名的断电保证。
+- 独立集成自检前后真实游戏资源 MD5 均为 `d1a94588bf414c621ba3933fd99300e0`，自检不修改真实资源或停止游戏。未测量实际游戏内渲染尺寸及帧率。
+- APK：`StarRailResolution-1.4.0.apk`，2246005 字节；SHA-256：`bc65e40d420bb75bafdd2f01f7ebd2151ff63aa552a01d35b3650d67a2e533e0`。签名验证通过，无网络权限。临时设备测试 APK 已卸载；本次未发布 GitHub Release。
+
+## v1.3.0 历史兼容性修复验证
 
 - `:app:testDebugUnitTest`、`:app:assembleRelease`、`:app:lintRelease` 通过；18 项单元测试全部通过，Lint 0 错误。
 - 回归测试包含从 Y900 实际读取的国际服 4.7.0（122）设备配置，覆盖新资源识别、按资源代次保存原始档位、修改后重新检测、恢复、历史修改兼容和无关数据变化拒绝。

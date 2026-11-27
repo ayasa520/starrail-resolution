@@ -5,16 +5,19 @@ import org.json.JSONObject;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.*;
+import io.rikka.starrailresolution.core.GameTarget;
 
 /** Runs only this APK's own file worker in a separate root process. */
-final class RootGateway {
+final class RootGateway implements PrivilegedGateway {
     private final String apk;
-    RootGateway(Context context) { apk=context.getApplicationInfo().sourceDir; }
+    private final GameTarget game;
+    RootGateway(Context context) {this(context,GameTarget.INTERNATIONAL);}
+    RootGateway(Context context,GameTarget game) {apk=context.getApplicationInfo().sourceDir;this.game=game;}
 
-    JSONObject execute(String action,Integer width) throws Exception {
+    @Override public JSONObject execute(String action,Integer width) throws Exception {
         if(!java.util.Arrays.asList("status","apply","official","undo").contains(action)) throw new IOException("未知操作");
         String command="CLASSPATH="+quote(apk)+" /system/bin/app_process /system/bin "
-            +RootMain.class.getName()+" "+action+(width==null?"":" "+width);
+            +RootMain.class.getName()+" --package "+quote(game.packageName)+" "+action+(width==null?"":" "+width);
         Process process=new ProcessBuilder("su","-c",command).redirectErrorStream(true).start();
         ExecutorService reader=Executors.newSingleThreadExecutor();
         Future<String> captured=reader.submit(()-> {

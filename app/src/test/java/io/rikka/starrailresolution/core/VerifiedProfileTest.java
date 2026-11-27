@@ -37,9 +37,9 @@ public class VerifiedProfileTest {
         ResolutionSpec target=ResolutionSpec.forLongEdge(2560,3840,2560);
         writeEntry(first.config.changeHighest(target));
         VerifiedProfile edited=inspect();
-        assertEquals(target,edited.config.resolution(4));
+        assertEquals(target,edited.config.resolution("Adreno VeryHigh",4));
         assertArrayEquals(official,edited.originalEntry());
-        for(int i=0;i<4;i++) assertEquals(first.config.resolution(i),edited.config.resolution(i));
+        for(int i=0;i<4;i++) assertEquals(first.config.resolution("Adreno VeryHigh",i),edited.config.resolution("Adreno VeryHigh",i));
         writeEntry(edited.originalEntry());
         assertEquals(location.packMd5,inspect().currentMd5);
     }
@@ -51,12 +51,12 @@ public class VerifiedProfileTest {
         VerifiedProfile first=inspect();first.retainOriginal(backups);
         writeEntry(first.config.changeHighest(new ResolutionSpec(3414,1707)));
         assertArrayEquals(differentOriginal,inspect().originalEntry());
-        assertEquals(new ResolutionSpec(2400,1200),new ProfileConfig(inspect().originalEntry()).resolution(4));
+        assertEquals(new ResolutionSpec(2400,1200),new ProfileConfig(inspect().originalEntry()).resolution("Adreno VeryHigh",4));
     }
 
     @Test public void acceptsLegacyEditsWithoutANewBaseline() throws Exception {
         prepare(ConfigTest.resource("Android-original.bytes"));
-        writeEntry(new ProfileConfig(official).changeHighest(new ResolutionSpec(3414,1707)));
+        writeEntry(new ProfileConfig(official).changeHighest("Adreno VeryHigh",new ResolutionSpec(3414,1707)));
         assertArrayEquals(official,inspect().originalEntry());
     }
 
@@ -64,13 +64,13 @@ public class VerifiedProfileTest {
         prepare(ConfigTest.resource("Android-4.7.0.bytes"));
         assertTrue(backups.mkdir());
         Files.copy(pack.toPath(),new File(backups,"baseline-"+location.packMd5+".bytes").toPath());
-        writeEntry(new ProfileConfig(official).changeHighest(new ResolutionSpec(3414,1707)));
+        writeEntry(new ProfileConfig(official).changeHighest("Adreno VeryHigh",new ResolutionSpec(3414,1707)));
         assertArrayEquals(official,inspect().originalEntry());
     }
 
     @Test public void rejectsNewerEditedResourcesWithNoAuthenticatedOriginal() throws Exception {
         prepare(ConfigTest.resource("Android-4.7.0.bytes"));
-        writeEntry(new ProfileConfig(official).changeHighest(new ResolutionSpec(3414,1707)));
+        writeEntry(new ProfileConfig(official).changeHighest("Adreno VeryHigh",new ResolutionSpec(3414,1707)));
         IOException failure=assertThrows(IOException.class,this::inspect);
         assertTrue(failure.getMessage().contains(location.packMd5));
     }

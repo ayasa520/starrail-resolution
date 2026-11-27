@@ -8,15 +8,29 @@ import java.util.*;
 /** Schema decoder and length-preserving editor; pack authenticity is checked separately. */
 public final class ProfileConfig {
     public static final String OFFICIAL_SHA256 = "c9fa969e1949dcbec7801f0f48e6dfa35c142fdab25db8a53bdfaf387a7abc9e";
-    private static final String TABLE = "/deviceSettings/Adreno VeryHigh/renderResolutions/";
+    private static final String LEGACY_PROFILE = "Adreno VeryHigh";
     private static final int[][] ORIGINAL = {{1080,540},{1280,640},{1440,720},{1680,840},{2160,1080}};
     private final byte[] bytes;
     private final Map<String, Span> spans = new HashMap<>();
+    private final Map<String, ResolutionTable> tables = new LinkedHashMap<>();
+    private final Map<String, Object> devices;
     private int position;
 
     private static final class Span {
         final int offset, size, value;
         Span(int offset, int size, int value) { this.offset=offset; this.size=size; this.value=value; }
+    }
+
+    /** An explicitly serialized table; profiles without one inherit the default. */
+    public static final class ResolutionTable {
+        public final String name;
+        private final List<ResolutionSpec> entries;
+        private ResolutionTable(String name,List<ResolutionSpec> entries) {
+            this.name=name;this.entries=Collections.unmodifiableList(new ArrayList<>(entries));
+        }
+        public int size() {return entries.size();}
+        public ResolutionSpec get(int index) {return entries.get(index);}
+        public ResolutionSpec highest() {return entries.get(entries.size()-1);}
     }
 
     private static final Map<String,String[]> SCHEMAS = new HashMap<>();
@@ -37,43 +51,107 @@ public final class ProfileConfig {
             "forceVulkanDevices:ForceVulkan","tempFixDevice:TempFix","ForceGraphicsJob:int","BackbufferColorSpace:int"});
     }
 
+    @SuppressWarnings("unchecked")
     public ProfileConfig(byte[] input) throws IOException {
         if (input.length < 100 || input.length > 1000000) throw new IOException("设备配置大小异常");
         bytes = input.clone();
-        read("Root", "", 0);
+        Map<String,Object> root=(Map<String,Object>)read("Root", "", 0);
         if (position != bytes.length) throw new IOException("设备配置尾部存在未识别数据");
-        for (int i=0;i<5;i++) {
-            ResolutionSpec spec=resolution(i);
-            if(spec.width<1 || spec.width>8191 || spec.height<1 || spec.height>8191) {
-                throw new IOException("Adreno VeryHigh 分辨率字段超出范围，档位 "+i);
+        devices=(Map<String,Object>)root.get("deviceSettings");
+        if(devices==null) throw new IOException("设备配置缺少 deviceSettings");
+        // Discover serialized arrays from the decoded resource rather than
+        // inferring a GPU family from a hard-coded path or a five-row layout.
+        // Updating every explicit table also covers profiles that inherit the
+        // Default table without creating new fields or changing GPU matching.
+        for(Map.Entry<String,Object> device:devices.entrySet()) {
+            Map<String,Object> fields=(Map<String,Object>)device.getValue();
+            List<Object> values=(List<Object>)fields.get("renderResolutions");
+            if(values==null) continue;
+            if(values.isEmpty() || values.size()>32) throw new IOException("分辨率表档位数量异常："+device.getKey());
+            List<ResolutionSpec> entries=new ArrayList<>();
+            for(int i=0;i<values.size();i++) {
+                Span width=span(device.getKey(),i,"width"),height=span(device.getKey(),i,"height");
+                if(width.value<1 || height.value<1) throw new IOException("分辨率字段无效："+device.getKey()+" / "+i);
+                entries.add(new ResolutionSpec(width.value,height.value));
             }
+            tables.put(device.getKey(),new ResolutionTable(device.getKey(),entries));
         }
-        if (spans.containsKey(TABLE+"5/width") || spans.containsKey(TABLE+"5/height")) {
-            throw new IOException("Adreno VeryHigh 分辨率档位数量已变化");
-        }
+        if(tables.isEmpty()) throw new IOException("设备配置没有可编辑的分辨率表");
     }
 
-    public ResolutionSpec resolution(int grade) throws IOException {
-        if (grade < 0 || grade > 4) throw new IOException("无效分辨率档位");
-        return new ResolutionSpec(span(grade,"width").value, span(grade,"height").value);
+    public List<ResolutionTable> resolutionTables() {return Collections.unmodifiableList(new ArrayList<>(tables.values()));}
+
+    public ResolutionTable table(String name) throws IOException {
+        ResolutionTable table=tables.get(name);
+        if(table==null) throw new IOException("未找到分辨率表："+name);
+        return table;
+    }
+
+    public ResolutionSpec resolution(String name,int grade) throws IOException {
+        ResolutionTable table=table(name);
+        if(grade<0 || grade>=table.size()) throw new IOException("无效分辨率档位："+name+" / "+grade);
+        return table.get(grade);
+    }
+
+    @SuppressWarnings("unchecked")
+    public String previewTableName(String gpu) throws IOException {
+        // This is a display hint, never a write selector. All tables are
+        // patched, so unknown/overlapping hardware rules cannot leave another
+        // GPU family unmodified. Only unambiguous GPU-only rules are used.
+        List<String> matches=new ArrayList<>();
+        for(String name:tables.keySet()) {
+            Map<String,Object> fields=(Map<String,Object>)devices.get(name);
+            List<Map<String,Object>> rules=(List<Map<String,Object>>)fields.get("requirements");
+            if(rules==null || rules.isEmpty()) continue;
+            boolean matched=true;
+            for(Map<String,Object> rule:rules) {
+                if(!"GraphicsDeviceName".equals(rule.get("Info"))) {matched=false;break;}
+                boolean any=false;
+                List<String> patterns=(List<String>)rule.get("Values");
+                if(patterns==null) {matched=false;break;}
+                for(String pattern:patterns) {
+                    try {any|=java.util.regex.Pattern.compile(pattern).matcher(gpu).find();}
+                    catch(java.util.regex.PatternSyntaxException invalid) {matched=false;break;}
+                }
+                matched&=any;
+            }
+            if(matched) matches.add(name);
+        }
+        if(matches.size()==1) return matches.get(0);
+        if(tables.containsKey("Default")) return "Default";
+        return tables.keySet().iterator().next();
     }
 
     public byte[] changeHighest(ResolutionSpec spec) throws IOException {
         byte[] result = bytes.clone();
-        replace(result, span(4,"width"), spec.width);
-        replace(result, span(4,"height"), spec.height);
+        for(ResolutionTable table:tables.values()) replaceHighest(result,table,spec);
         // Re-parse the complete edited entry so a schema or varint-layout
         // change cannot turn a resolution edit into an unrelated field edit.
-        if (!new ProfileConfig(result).resolution(4).equals(spec)) throw new IOException("修改后的配置校验失败");
+        for(ResolutionTable table:new ProfileConfig(result).tables.values()) {
+            if(!table.highest().equals(spec)) throw new IOException("修改后的配置校验失败："+table.name);
+        }
         return result;
+    }
+
+    /** Used for exact legacy-patch verification; production updates every table. */
+    public byte[] changeHighest(String name,ResolutionSpec spec) throws IOException {
+        byte[] result=bytes.clone();replaceHighest(result,table(name),spec);new ProfileConfig(result);return result;
+    }
+
+    private void replaceHighest(byte[] result,ResolutionTable table,ResolutionSpec spec) throws IOException {
+        replace(result,span(table.name,table.size()-1,"width"),spec.width);
+        replace(result,span(table.name,table.size()-1,"height"),spec.height);
     }
 
     public byte[] restoreResolutions(ProfileConfig official) throws IOException {
         byte[] result = bytes.clone();
-        for (int i=0;i<5;i++) {
-            ResolutionSpec original=official.resolution(i);
-            replace(result,span(i,"width"),original.width);
-            replace(result,span(i,"height"),original.height);
+        if(!tables.keySet().equals(official.tables.keySet())) throw new IOException("原始配置的分辨率表集合不符");
+        // Normalize only fields owned by this helper. Lower grades, hardware
+        // rules, and every unrelated byte must still pass the full-pack hash.
+        for(ResolutionTable table:tables.values()) {
+            ResolutionTable original=official.table(table.name);
+            if(table.size()!=original.size()) throw new IOException("原始配置档位数量不符："+table.name);
+            replaceHighest(result,table,original.highest());
         }
         return result;
     }
@@ -82,8 +160,8 @@ public final class ProfileConfig {
     public byte[] legacyOriginalEntry() throws IOException {
         byte[] result = bytes.clone();
         for (int i=0;i<5;i++) {
-            replace(result, span(i,"width"), ORIGINAL[i][0]);
-            replace(result, span(i,"height"), ORIGINAL[i][1]);
+            replace(result, span(LEGACY_PROFILE,i,"width"), ORIGINAL[i][0]);
+            replace(result, span(LEGACY_PROFILE,i,"height"), ORIGINAL[i][1]);
         }
         // This fingerprint is a migration path for old ADB/helper edits, not
         // an allowlist for new game releases. New releases use their own
@@ -94,21 +172,22 @@ public final class ProfileConfig {
         return result;
     }
 
-    private Span span(int index, String field) throws IOException {
-        Span s = spans.get(TABLE + index + "/" + field);
-        if (s == null) throw new IOException("未找到 Adreno 最高设备配置");
+    private Span span(String name,int index, String field) throws IOException {
+        Span s = spans.get("/deviceSettings/"+name+"/renderResolutions/" + index + "/" + field);
+        if (s == null) throw new IOException("分辨率字段缺失："+name+" / "+index+" / "+field);
         return s;
     }
 
     private static void replace(byte[] target, Span span, int value) throws IOException {
-        if (value < 1 || value > 8191) throw new IOException("目标分辨率超出可保持原布局的范围");
-        int unsigned = value << 1;
+        if (value < 1) throw new IOException("目标分辨率必须为正数");
+        long unsigned = (long)value << 1;
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
         do {
-            int next = unsigned & 127; unsigned >>>= 7;
+            int next = (int)(unsigned & 127); unsigned >>>= 7;
             encoded.write(unsigned == 0 ? next : next | 128);
         } while (unsigned != 0);
-        if (encoded.size() != span.size) throw new IOException("目标值会改变资源长度，已停止");
+        if (encoded.size() != span.size) throw new IOException("目标值 "+value+" 需要 "+encoded.size()
+            +" 字节，原字段为 "+span.size+" 字节，偏移 "+span.offset+"；未写入");
         System.arraycopy(encoded.toByteArray(),0,target,span.offset,span.size);
     }
 

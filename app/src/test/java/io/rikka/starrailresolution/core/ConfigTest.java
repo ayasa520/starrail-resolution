@@ -26,7 +26,7 @@ public class ConfigTest {
             "9ad4dedfedd61c706d58b6277c2cf3d1bcd2e5106cfe40e8f86c33932cdbc26a",
             "bebb3b31c4cc860cf91c7db7863fa159b142b11bbf77ef802a0d03f53d954f55"};
         for(int i=0;i<rectangles.length;i++) {
-            byte[] changed=config.changeHighest(new ResolutionSpec(rectangles[i][0],rectangles[i][1]));
+            byte[] changed=config.changeHighest("Adreno VeryHigh",new ResolutionSpec(rectangles[i][0],rectangles[i][1]));
             assertEquals(hashes[i],Hashing.sha256(changed));
             assertArrayEquals(original,new ProfileConfig(changed).legacyOriginalEntry());
             int differences=0;
@@ -52,9 +52,9 @@ public class ConfigTest {
         assertThrows(IOException.class,()->ResourceManifest.locate(buffer.toByteArray()));
     }
     @Test public void validatesCustomAndNativeTargets() throws Exception {
-        assertEquals(new ResolutionSpec(3414,1707),ResolutionSpec.forLongEdge(2560,3840,2560));
-        assertEquals(new ResolutionSpec(2880,1440),ResolutionSpec.forLongEdge(2160,3840,2560));
-        assertEquals(new ResolutionSpec(5120,2560),ResolutionSpec.forLongEdge(3840,3840,2560));
+        assertEquals(new ResolutionSpec(2560,1707),ResolutionSpec.forLongEdge(2560,3840,2560));
+        assertEquals(new ResolutionSpec(2160,1440),ResolutionSpec.forLongEdge(2160,3840,2560));
+        assertEquals(new ResolutionSpec(3840,2560),ResolutionSpec.forLongEdge(3840,3840,2560));
         assertThrows(IOException.class,()->ResolutionSpec.forLongEdge(9000,3840,2560));
         assertThrows(IOException.class,()->ResolutionSpec.forLongEdge(0,3840,2560));
     }
