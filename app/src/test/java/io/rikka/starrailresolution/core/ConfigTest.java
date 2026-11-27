@@ -28,7 +28,7 @@ public class ConfigTest {
         for(int i=0;i<rectangles.length;i++) {
             byte[] changed=config.changeHighest(new ResolutionSpec(rectangles[i][0],rectangles[i][1]));
             assertEquals(hashes[i],Hashing.sha256(changed));
-            assertArrayEquals(original,new ProfileConfig(changed).originalEntry());
+            assertArrayEquals(original,new ProfileConfig(changed).legacyOriginalEntry());
             int differences=0;
             for(int p=0;p<original.length;p++) if(original[p]!=changed[p]) differences++;
             assertEquals(4,differences);
@@ -36,7 +36,7 @@ public class ConfigTest {
     }
     @Test public void refusesUnrelatedConfigEdits() throws Exception {
         byte[] bytes=resource("Android-original.bytes");bytes[35]^=1;
-        assertThrows(IOException.class,()->new ProfileConfig(bytes));
+        assertThrows(IOException.class,()->new ProfileConfig(bytes).legacyOriginalEntry());
     }
     @Test public void refusesTruncatedOrNewSchemaData() throws Exception {
         byte[] bytes=resource("Android-original.bytes");

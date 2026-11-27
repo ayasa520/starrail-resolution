@@ -19,10 +19,12 @@ public final class RootMain {
     private static final String PACKAGE="com.HoYoverse.hkrpgoversea";
     private static final File RESOURCE_DIR=new File("/sdcard/Android/data/"+PACKAGE+"/files/DesignData/Android");
     private static final File BACKUPS=new File("/sdcard/Download/StarRailResolution");
+    private static final JSONObject DIAGNOSTICS=new JSONObject();
 
     private static final class Session {
         File pack; ResourceManifest.Entry location; byte[] entry; ProfileConfig config;
-        String currentMd5, gpu; int screenWidth,screenHeight;
+        VerifiedProfile verified;
+        String currentMd5, gpu, gameVersion; long gameVersionCode; int screenWidth,screenHeight;
     }
 
     public static void main(String[] args) {
@@ -47,11 +49,12 @@ public final class RootMain {
                     if(action.equals("apply")) {
                         if(args.length!=2) throw new IOException("缺少目标分辨率");
                         replacement=session.config.changeHighest(ResolutionSpec.forLongEdge(Integer.parseInt(args[1]),session.screenWidth,session.screenHeight));
-                    } else if(action.equals("official")) replacement=session.config.originalEntry();
+                    } else if(action.equals("official")) replacement=session.verified.originalEntry();
                     else replacement=undoEntry(session);
                     if(Arrays.equals(session.entry,replacement)) {
                         response=status(session).put("ok",true).put("message","当前已是所选档位，无需重启");
                     } else {
+                        session.verified.retainOriginal(BACKUPS);
                         stopGame();
                         ResolutionSpec old=session.config.resolution(4);
                         ResolutionSpec target=new ProfileConfig(replacement).resolution(4);
@@ -61,7 +64,9 @@ public final class RootMain {
                             public void prepared(File dir,String before,String after) throws IOException {
                                 try {
                                     record=new JSONObject().put("status","prepared").put("action",action)
-                                        .put("package",PACKAGE).put("versionCode",118)
+                                        .put("package",PACKAGE).put("versionCode",session.gameVersionCode)
+                                        .put("versionName",session.gameVersion)
+                                        .put("officialEntrySha256",Hashing.sha256(session.verified.originalEntry()))
                                         .put("packName",session.pack.getName()).put("packSize",session.location.packSize)
                                         .put("entryOffset",session.location.offset).put("entryLength",session.location.size)
                                         .put("beforeMd5",before).put("afterMd5",after)
@@ -99,16 +104,24 @@ public final class RootMain {
             catch(JSONException impossible) { throw new AssertionError(impossible); }
             error.printStackTrace(System.err);
         }
+        try {response.put("diagnostics",DIAGNOSTICS);} catch(JSONException impossible) {throw new AssertionError(impossible);}
         System.out.println(RESULT_PREFIX+response);
     }
 
     private static Session inspect() throws Exception {
         String installed=command("cmd","package","list","packages","--show-versioncode",PACKAGE);
-        if(!installed.trim().equals("package:"+PACKAGE+" versionCode:118")) {
-            throw new IOException("首版仅支持已验证的国际服 4.6.0（118），当前版本未修改");
-        }
+        Matcher code=Pattern.compile("(?m)^package:"+Pattern.quote(PACKAGE)+" versionCode:(\\d+)\\s*$").matcher(installed);
+        if(!code.find()) throw new IOException("未找到国际服游戏安装信息："+installed.trim());
+        long versionCode=Long.parseLong(code.group(1));
+        Matcher versionName=Pattern.compile("(?m)^\\s*versionName=(\\S+)").matcher(command("dumpsys","package",PACKAGE));
+        String version=versionName.find()?versionName.group(1):"versionCode "+versionCode;
+        // Version metadata is diagnostic, not a compatibility allowlist. The
+        // current resource manifest and full binary decoder decide whether a
+        // release can be edited, including releases unknown at build time.
+        DIAGNOSTICS.put("package",PACKAGE).put("versionName",version).put("versionCode",versionCode);
         JSONObject vulkan=new JSONObject(command("cmd","gpu","vkjson"));
         String gpu=vulkan.getJSONArray("devices").getJSONObject(0).getJSONObject("properties").getString("deviceName");
+        DIAGNOSTICS.put("gpu",gpu);
         if(!gpu.matches(".*Adreno.*830.*")) throw new IOException("首版仅适配已验证的 Adreno 830，当前设备未修改");
         String size=command("wm","size");
         if(size.contains("Override")) throw new IOException("存在系统分辨率覆盖；助手不会更改系统显示设置，请先恢复后再检测");
@@ -116,28 +129,32 @@ public final class RootMain {
         if(!dimensions.find()) throw new IOException("无法读取屏幕原生尺寸");
         int a=Integer.parseInt(dimensions.group(1)),b=Integer.parseInt(dimensions.group(2));
         int width=Math.max(a,b),height=Math.min(a,b);
+        DIAGNOSTICS.put("screen",new JSONArray(new int[]{width,height}));
         if(width!=3840 || height!=2560) throw new IOException("首版仅验证了 3840×2560 平板，当前设备未修改");
         File[] manifests=RESOURCE_DIR.listFiles((dir,name)->name.matches("DesignV_[0-9a-f]{32}\\.bytes"));
         if(manifests==null || manifests.length==0) throw new IOException("未找到资源清单，请先完成游戏下载");
         Session found=null;IOException last=null;int valid=0;
+        JSONArray candidates=new JSONArray();DIAGNOSTICS.put("resourceCandidates",candidates);
         for(File manifest:manifests) {
+            JSONObject candidate=new JSONObject().put("manifest",manifest.getName());candidates.put(candidate);
             try {
                 ResourceManifest.Entry location=ResourceManifest.locate(readLimited(manifest,16000000));
+                candidate.put("officialPackMd5",location.packMd5).put("packSize",location.packSize)
+                    .put("entryOffset",location.offset).put("entryLength",location.size);
                 File pack=new File(RESOURCE_DIR,location.packMd5+".bytes");
                 if(!pack.isFile() || pack.length()!=location.packSize) throw new IOException("资源包缺失或大小不符");
                 byte[] entry=ResourceTransaction.readEntry(pack,location);
-                ProfileConfig config=new ProfileConfig(entry);
-                // Validate the entire pack against the unmodified manifest by
-                // virtually restoring the resolution table for the checksum.
-                // This accepts our earlier adb edits while refusing unrelated
-                // changes, corruption, or a different game's resource format.
-                if(!Hashing.substitutedMd5(pack,location.offset,config.originalEntry()).equals(location.packMd5)) {
-                    throw new IOException("资源包存在分辨率配置以外的变化，已停止");
-                }
+                candidate.put("entrySha256",Hashing.sha256(entry));
+                VerifiedProfile verified=VerifiedProfile.inspect(pack,location,entry,BACKUPS);
+                candidate.put("verified",true).put("currentPackMd5",verified.currentMd5);
                 valid++;
-                found=new Session();found.pack=pack;found.location=location;found.entry=entry;found.config=config;
-                found.currentMd5=Hashing.md5(pack);found.gpu=gpu;found.screenWidth=width;found.screenHeight=height;
-            } catch(IOException error) { last=error; }
+                found=new Session();found.pack=pack;found.location=location;found.entry=entry;found.config=verified.config;
+                found.verified=verified;found.gameVersion=version;found.gameVersionCode=versionCode;
+                found.currentMd5=verified.currentMd5;found.gpu=gpu;found.screenWidth=width;found.screenHeight=height;
+            } catch(IOException error) {
+                candidate.put("verified",false).put("error",error.getMessage());
+                System.err.println("Resource inspection: "+candidate);last=error;
+            }
         }
         if(found==null) throw last==null?new IOException("未找到可用的设备配置"):last;
         if(valid!=1) throw new IOException("存在多个有效资源清单，无法唯一定位当前配置");
@@ -158,7 +175,7 @@ public final class RootMain {
             table.put(new JSONObject().put("width",spec.width).put("height",spec.height)
                 .put("predicted",spec.predictedLabel(session.screenWidth,session.screenHeight)));
         }
-        return new JSONObject().put("version","4.6.0").put("gpu",session.gpu)
+        return new JSONObject().put("version",session.gameVersion).put("versionCode",session.gameVersionCode).put("gpu",session.gpu)
             .put("screenWidth",session.screenWidth).put("screenHeight",session.screenHeight)
             .put("targetWidth",resolution.width).put("targetHeight",resolution.height)
             .put("predicted",resolution.predictedLabel(session.screenWidth,session.screenHeight))
@@ -283,6 +300,8 @@ public final class RootMain {
             System.arraycopy(before,0,fakeBytes,32,before.length);ResourceTransaction.writeSynced(fake,fakeBytes);
             String originalMd5=Hashing.md5(fake);
             ResourceManifest.Entry location=new ResourceManifest.Entry(originalMd5,fake.length(),32,before.length);
+            File scratchBackups=new File(scratch,"backups");
+            VerifiedProfile.inspect(fake,location,before,scratchBackups).retainOriginal(scratchBackups);
             ResourceTransaction.Journal journal=new ResourceTransaction.Journal() {
                 public void prepared(File dir,String b,String a) throws IOException {
                     try {writeJson(new File(dir,"change.json"),new JSONObject().put("status","prepared").put("beforeMd5",b).put("afterMd5",a));}
@@ -293,11 +312,13 @@ public final class RootMain {
                 public void completed(File dir,String a) { }
             };
             ResourceTransaction transaction=new ResourceTransaction(RootMain::commitOnAndroid);
-            ResourceTransaction.Result applied=transaction.apply(fake,location,before,after,originalMd5,new File(scratch,"backups"),journal);
+            ResourceTransaction.Result applied=transaction.apply(fake,location,before,after,originalMd5,scratchBackups,journal);
             if(!Arrays.equals(ResourceTransaction.readEntry(fake,location),after)) throw new IOException("模拟写入自检失败");
-            File reconciled=lastCompletedBackup(new File(scratch,"backups"),applied.afterMd5);
+            VerifiedProfile patched=VerifiedProfile.inspect(fake,location,after,scratchBackups);
+            if(!Arrays.equals(patched.originalEntry(),before)) throw new IOException("当前资源原始配置恢复自检失败");
+            File reconciled=lastCompletedBackup(scratchBackups,applied.afterMd5);
             if(reconciled==null || !reconciled.equals(applied.backup)) throw new IOException("中断后的回退记录恢复自检失败");
-            transaction.apply(fake,location,after,before,applied.afterMd5,new File(scratch,"backups"),journal);
+            transaction.apply(fake,location,after,patched.originalEntry(),applied.afterMd5,scratchBackups,journal);
             if(!Hashing.md5(fake).equals(originalMd5)) throw new IOException("模拟恢复自检失败");
             return "真实游戏资源只读检测通过；独立副本在外部存储的备份、原子写入、权限保留和恢复均通过。未修改或停止游戏。";
         } finally { deleteScratch(scratch); }

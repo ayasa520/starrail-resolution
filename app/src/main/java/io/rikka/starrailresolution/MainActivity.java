@@ -112,7 +112,7 @@ public final class MainActivity extends Activity {
         official=button("恢复官方分辨率档位",false);official.setOnClickListener(v->run("official",null));add(recovery,official,8);
         add(recovery,label("每次写入和撤销都会留存回退记录。备份保存在 Download/StarRailResolution。",12,MUTED,false),10);
         refresh=button("重新检测",false);refresh.setOnClickListener(v->run("status",null));add(body,refresh,16);
-        add(body,label("仅修改游戏内「分辨率：非常高」对应的 3D 目标，请在游戏中选择这一档。应用会退出并重启游戏。\n\n首版适配：国际服 4.6.0 · Adreno 830 · 3840×2560。需要 Root，无网络权限。",12,MUTED,false),16);
+        add(body,label("仅修改游戏内「分辨率：非常高」对应的 3D 目标，请在游戏中选择这一档。应用会退出并重启游戏。\n\n国际服按实际资源结构检测兼容性，不限制游戏版本号。当前设备适配：Adreno 830 · 3840×2560。需要 Root，无网络权限。",12,MUTED,false),16);
         Button log=button("查看 / 复制诊断",false);add(body,log,14);
         diagnostics=label("",12,MUTED,false);diagnostics.setTextIsSelectable(true);diagnostics.setVisibility(View.GONE);add(body,diagnostics,8);
         log.setOnClickListener(v-> {

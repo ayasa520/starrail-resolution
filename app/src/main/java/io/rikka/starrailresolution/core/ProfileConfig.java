@@ -5,7 +5,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.*;
 import java.util.*;
 
-/** Exact schema decoder and length-preserving editor for the verified config. */
+/** Schema decoder and length-preserving editor; pack authenticity is checked separately. */
 public final class ProfileConfig {
     public static final String OFFICIAL_SHA256 = "c9fa969e1949dcbec7801f0f48e6dfa35c142fdab25db8a53bdfaf387a7abc9e";
     private static final String TABLE = "/deviceSettings/Adreno VeryHigh/renderResolutions/";
@@ -42,12 +42,14 @@ public final class ProfileConfig {
         bytes = input.clone();
         read("Root", "", 0);
         if (position != bytes.length) throw new IOException("设备配置尾部存在未识别数据");
-        for (int i=0;i<5;i++) { span(i,"width"); span(i,"height"); }
-        // Normalize only the known resolution fields before checking the
-        // original entry fingerprint. Other GPU profiles and every unrelated
-        // byte must still match the exact config investigated on this tablet.
-        if (!Hashing.sha256(originalEntry()).equals(OFFICIAL_SHA256)) {
-            throw new IOException("当前设备配置与已验证的 4.6.0 资源不匹配，未修改");
+        for (int i=0;i<5;i++) {
+            ResolutionSpec spec=resolution(i);
+            if(spec.width<1 || spec.width>8191 || spec.height<1 || spec.height>8191) {
+                throw new IOException("Adreno VeryHigh 分辨率字段超出范围，档位 "+i);
+            }
+        }
+        if (spans.containsKey(TABLE+"5/width") || spans.containsKey(TABLE+"5/height")) {
+            throw new IOException("Adreno VeryHigh 分辨率档位数量已变化");
         }
     }
 
@@ -60,18 +62,34 @@ public final class ProfileConfig {
         byte[] result = bytes.clone();
         replace(result, span(4,"width"), spec.width);
         replace(result, span(4,"height"), spec.height);
-        // Re-parse the complete edited entry. It must retain the verified
-        // canonical fingerprint and the requested dimensions, not merely a
-        // matching byte pattern that could belong to another GPU family.
+        // Re-parse the complete edited entry so a schema or varint-layout
+        // change cannot turn a resolution edit into an unrelated field edit.
         if (!new ProfileConfig(result).resolution(4).equals(spec)) throw new IOException("修改后的配置校验失败");
         return result;
     }
 
-    public byte[] originalEntry() throws IOException {
+    public byte[] restoreResolutions(ProfileConfig official) throws IOException {
+        byte[] result = bytes.clone();
+        for (int i=0;i<5;i++) {
+            ResolutionSpec original=official.resolution(i);
+            replace(result,span(i,"width"),original.width);
+            replace(result,span(i,"height"),original.height);
+        }
+        return result;
+    }
+
+    /** Recover only the exact legacy entry used before per-resource baselines existed. */
+    public byte[] legacyOriginalEntry() throws IOException {
         byte[] result = bytes.clone();
         for (int i=0;i<5;i++) {
             replace(result, span(i,"width"), ORIGINAL[i][0]);
             replace(result, span(i,"height"), ORIGINAL[i][1]);
+        }
+        // This fingerprint is a migration path for old ADB/helper edits, not
+        // an allowlist for new game releases. New releases use their own
+        // manifest-authenticated original entry in VerifiedProfile.
+        if (!Hashing.sha256(result).equals(OFFICIAL_SHA256)) {
+            throw new IOException("当前资源不是可恢复原始配置的旧版资源");
         }
         return result;
     }
@@ -130,7 +148,8 @@ public final class ProfileConfig {
                 String[] fields=SCHEMAS.get(type);
                 if(fields==null) throw new IOException("未知配置类型");
                 long mask=unsigned();
-                if((mask >>> fields.length)!=0) throw new IOException("配置含新字段，未修改");
+                if((mask >>> fields.length)!=0) throw new IOException("配置含未识别字段："+type+" "+path
+                    +"，偏移 "+position+"，字段掩码 0x"+Long.toHexString(mask));
                 Map<String,Object> result=new LinkedHashMap<>();
                 for(int i=0;i<fields.length;i++) if((mask & (1L<<i))!=0) {
                     String[] field=fields[i].split(":",2);
